@@ -1,0 +1,55 @@
+หมวดหมู่ที่ 1: การจัดการ Hardware และ Real-Time Processing
+1.Adaptive Sweep Speed: ปรับความเร็วในการหมุน Servo ตามระยะที่ตรวจพบ (ถ้าเจอวัตถุใกล้ให้หมุนช้าลงเพื่อเก็บรายละเอียด ถ้าว่างให้หมุนเร็ว)
+
+2.Multi-Sample Filtering: ฟังก์ชันกรองสัญญาณรบกวน (Noise) โดยการยิง Ultrasonic หลายครั้งในองศาเดียวแล้วใช้ค่า Median หรือ Moving Average
+
+3.Sector Scanning: กำหนดขอบเขตการกวาดล้างเฉพาะจุด (เช่น 45°-135°) ผ่าน Software แทนที่จะกวาดเต็ม 180° ตลอดเวลา
+
+4.Object Tracking Mode: เมื่อตรวจพบวัตถุในระยะประชิด Servo จะหยุดกวาดและ "Lock" ตำแหน่งตามการเคลื่อนที่ของวัตถุนั้น
+
+5.Dynamic Thresholding: ปรับระยะการเตือนภัย (Threshold) โดยอัตโนมัติ ตามสภาพแวดล้อมหรือช่วงเวลา
+
+
+หมวดหมู่ที่ 2: การวิเคราะห์ข้อมูล (Data Analytics)
+6.Object Width Estimation: คำนวณความกว้างของวัตถุโดยวัดจากจำนวนองศาที่ Ultrasonic ตรวจพบในระยะคงที่
+
+7.Motion Direction Detection: เปรียบเทียบตำแหน่งวัตถุจาก Scan Cycle ก่อนหน้า เพื่อระบุว่าวัตถุเคลื่อนที่ "เข้าหา" หรือ "ออกห่าง"
+
+8.Map Grid Generation: สร้างแผนที่ 2 มิติแบบง่าย (Grid Map) เก็บไว้ใน Memory เพื่อดูเค้าโครงของห้อง
+
+9.Static Background Subtraction: จดจำตำแหน่งวัตถุที่อยู่นิ่ง (เช่น กำแพง) และแจ้งเตือนเฉพาะเมื่อมี "วัตถุใหม่" เข้ามาแทรก
+
+10.Heatmap Data: บันทึกความถี่ของการเจอวัตถุในแต่ละองศา เพื่อหาว่าจุดไหนมีกิจกรรมเกิดขึ้นบ่อยที่สุด
+
+
+หมวดหมู่ที่ 3: การเชื่อมต่อและ UI (Connectivity & Interface)
+11.Web-Based Radar Display: สร้าง Web Server บน ESP32 เพื่อแสดงผลกราฟิก Radar แบบ Real-time บน Browser
+
+12.WebSocket Telemetry: ส่งข้อมูลพิกัด (r, theta) ผ่าน WebSocket เพื่อความรวดเร็วในการแสดงผลบนคอมพิวเตอร์
+
+13.OTA (Over-the-Air) Update: ฟังก์ชันอัปเดต Code ผ่าน Wi-Fi โดยไม่ต้องถอด ESP32 ออกมาเสียบสาย
+
+14.Alarm Notification: ส่งการแจ้งเตือนผ่าน Line Notify หรือ Telegram เมื่อตรวจพบการบุกรุกในระยะที่กำหนด
+
+15.Configurable Dashboard: หน้า Dashboard สำหรับปรับค่า Servo Pulse Width หรือ Ultrasonic Timeout ได้ทันที
+
+
+หมวดหมู่ที่ 4: ความปลอดภัยและการจัดการพลังงาน
+16.Fail-Safe Mechanism: ตรวจสอบว่า Servo ติดขัดหรือไม่ (เช่น ถ้ากระแสเกินหรือ Sensor ไม่เปลี่ยนค่า) และสั่งหยุดทำงานเพื่อป้องกันมอเตอร์ไหม้
+
+17.Deep Sleep Scheduling: ตั้งเวลาให้ระบบหลับ (Power Saving) และตื่นขึ้นมา Scan เป็นรอบๆ แทนการทำงานตลอดเวลา
+
+18.Blackout Recovery: บันทึกค่าองศาล่าสุดลงใน EEPROM/nvs เพื่อให้ทำงานต่อได้ทันทีหลังไฟตก
+
+19.Intrusion Logging: บันทึกวันและเวลา (Timestamp) ที่ตรวจพบวัตถุลงใน MicroSD Card หรือ Flash Memory
+
+20.System Health Monitor (RTOS Task): สร้าง Task พิเศษเพื่อ Monitor การทำงานของ Task อื่นๆ (Watchdog) และรายงานเปอร์เซ็นต์การใช้งาน CPU ของแต่ละ Task
+
+แนวทางการออกแบบด้วย FreeRTOS
+เพื่อให้ 20 ฟังก์ชันนี้ทำงานได้ลื่นไหล คุณควรแยก Task หลักออกเป็น:
+
+Task 1 (Sensor): ควบคุม Servo และอ่านค่า Ultrasonic (High Priority)
+
+Task 2 (Processing): คำนวณ Logic และ Filter ข้อมูล
+
+Task 3 (Communication): จัดการ Wi-Fi/Web Server (Low Priority)

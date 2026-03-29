@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "author": "Chaichana SURINRACH",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": -9.6,
+      "left": -119.96,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo1",
+      "top": -59.6,
+      "left": 182.4,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-hc-sr04",
+      "id": "ultrasonic1",
+      "top": 62.7,
+      "left": 144.9,
+      "rotate": 90,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", "", []],
+    ["esp:RX", "$serialMonitor:TX", "", []],
+    ["esp:GND.1", "servo1:GND", "black", ["h-9.45", "v-153.6"]],
+    ["esp:5V", "servo1:V+", "red", ["v19.2", "h278.55", "v-211.3"]],
+    ["esp:5V", "ultrasonic1:VCC", "red", ["v19.2", "h278.55", "v-115.2"]],
+    [
+      "esp:GND.1",
+      "ultrasonic1:GND",
+      "black",
+      ["h-9.45", "v-153.6", "h268.8", "v144", "h28.8", "v-8.4"]
+    ],
+    [
+      "ultrasonic1:TRIG",
+      "esp:5",
+      "green",
+      ["h-28.8", "v9.2", "h-19.2", "v-9.6"]
+    ],
+    [
+      "ultrasonic1:ECHO",
+      "esp:18",
+      "gold",
+      ["h-9.6", "v-29.6", "h-9.6", "h-28.8", "v9.6"]
+    ],
+    ["servo1:PWM", "esp:13", "green", ["h-9.6", "v-28.6", "h-307.2", "v172.8"]]
+  ],
+  "dependencies": {}
+}
