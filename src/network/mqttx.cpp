@@ -70,12 +70,16 @@ void callback(char *topic, byte *payload, unsigned int length)
     if (!doc["maxRange"].isNull())
     {
         maxRange = doc["maxRange"].as<int>();
+        if (RedZone > maxRange)
+            RedZone = maxRange; // ✅ ปรับ RedZone ถ้าเกิน
         Serial.printf("🔧 maxRange: %d\n", maxRange);
     }
 
     if (!doc["RedZone"].isNull())
     {
         RedZone = doc["RedZone"].as<int>();
+        if (RedZone > maxRange)
+            RedZone = maxRange; // ✅ ไม่เกิน maxRange
         Serial.printf("🔧 RedZone: %d\n", RedZone);
     }
 }
@@ -99,7 +103,7 @@ bool reconnect()
     {
         Serial.println("MQTT connected!");
         client.publish("BeanNian/esp32/status", "ESP32-Connected", true);
-        client.subscribe("BeanNian/esp32/state"); // ✅ subscribe ถูก topic
+        client.subscribe("BeanNian/esp32/state");
         return true;
     }
     else
@@ -151,5 +155,5 @@ void mqttPublish(const char *topic, const char *message)
     if (client.connected())
         client.publish(topic, message, true);
     else
-        Serial.println("❌ mqttPublish failed: not connected"); // ✅ เพิ่ม
+        Serial.println("❌ mqttPublish failed: not connected");
 }
