@@ -201,17 +201,19 @@ void sonarTask(void *pvParameters)
             float dist = getDistance();
             bool inRange = (dist > DETECT_MIN_CM && dist < maxRange);
 
-            char msg[80];
             if (inRange)
+            {
+                char msg[80];
                 snprintf(msg, sizeof(msg),
                          "{\"mode\":\"STATIC\",\"type\":\"%s\",\"detected\":true,\"distance\":%.1f}",
                          getType(dist), dist);
+                mqttPublish("BeanNian/esp32/report", msg);
+                Serial.printf("📡 STATIC [%d°] %s\n", target, msg);
+            }
             else
-                snprintf(msg, sizeof(msg),
-                         "{\"mode\":\"STATIC\",\"type\":\"-\",\"detected\":false}");
-
-            mqttPublish("BeanNian/esp32/report", msg);
-            Serial.printf("📡 STATIC [%d°] %s\n", target, msg);
+            {
+                Serial.printf("📡 STATIC [%d°] nothing\n", target);
+            }
 
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
