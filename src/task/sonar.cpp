@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Servo.h>
 #include "sonar.h"
+#include "esp_task_wdt.h"
 #include "../network/mqttx.h"
 #include "../config/state.h"
 
@@ -11,6 +12,10 @@
 #define MAX_OBJECTS 20
 #define TRACK_SCAN_RANGE 10
 #define NULL_TOLERANCE 3
+
+// ✅ FIX: เพิ่ม timeout รอ MQTT ready ก่อน sonarTask วิ่ง
+// ป้องกัน retained message มาเปลี่ยน isSystemStart หลัง servo เริ่มแล้ว
+#define MQTT_READY_TIMEOUT_MS 3000
 
 volatile bool alertEnabled = true;
 volatile bool servoEnabled = true;
@@ -70,7 +75,6 @@ void reportRoam(DetectedObject *objects, int count)
     Serial.printf("📊 ROAM report: %s\n", msg);
 }
 
-// ── scan ระหว่าง scanMin-scanMax หามุมที่ใกล้สุด ────────────
 int scanRange(int scanMin, int scanMax)
 {
     int bestAngle = -1;
@@ -92,10 +96,9 @@ int scanRange(int scanMin, int scanMax)
         }
     }
 
-    return bestAngle; // -1 ถ้าไม่เจอ
+    return bestAngle;
 }
 
-// ── scan ±TRACK_SCAN_RANGE° จาก center ────────────────────
 int scanClosest(int centerAngle)
 {
     return scanRange(
@@ -105,12 +108,45 @@ int scanClosest(int centerAngle)
 
 void sonarTask(void *pvParameters)
 {
+    esp_task_wdt_add(NULL);
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(ECHO_PIN, INPUT);
 
     radarServo.attach(SERVO_PIN);
-    radarServo.write(minRotate);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    radarServo.write(90);
     vTaskDelay(pdMS_TO_TICKS(1000));
+
+    // ✅ FIX: รอให้ mqttMutex พร้อม (แปลว่า mqttTask init เสร็จแล้ว)
+    // ช่วงนี้ retained message จะถูก callback แล้ว isSystemStart จะถูกเซ็ตถูกต้อง
+    // ป้องกัน sonarTask วิ่งก่อน retained message มา แล้วติด loop ที่ isSystemStart
+    Serial.println("⏳ sonarTask: waiting for MQTT ready...");
+    unsigned long waitStart = millis();
+    while (mqttMutex == nullptr && millis() - waitStart < MQTT_READY_TIMEOUT_MS)
+    {
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    // ✅ FIX: รอเพิ่มอีก 600ms ให้ retained message วิ่งผ่าน callback ก่อน
+    // mqttTask loop 500ms รับ retained message — รอให้มันจบก่อน
+    for (int i = 0; i < 6; i++)
+    {
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    Serial.printf("✅ sonarTask: ready | isSystemStart=%d | mode=%s\n",
+                  (int)isSystemStart, (char *)mode);
+
+    // ✅ FIX: ถ้า mode ว่างหรือไม่รู้จัก ให้ default เป็น ROAM
+    if (strlen((const char *)mode) == 0 ||
+        (strcmp((const char *)mode, "ROAM") != 0 &&
+         strcmp((const char *)mode, "TRACK") != 0 &&
+         strcmp((const char *)mode, "STATIC") != 0))
+    {
+        strncpy((char *)mode, "ROAM", sizeof(mode) - 1);
+        Serial.println("⚠️  mode unknown — defaulting to ROAM");
+    }
 
     int angle = minRotate;
     int direction = 1;
@@ -125,15 +161,33 @@ void sonarTask(void *pvParameters)
     float groupMinDist = 9999;
     int nullCount = 0;
 
+    float prev = 0;
+    char lastMode[16] = "";
+
     for (;;)
     {
-        // ── ถ้าระบบปิด ─────────────────────────────────────
+        esp_task_wdt_reset();
+
+        // ── ถ้าระบบปิด จอดนิ่งที่ 90° ──────────────────────
         if (!isSystemStart)
         {
-            if (radarServo.attached())
-                radarServo.detach();
+            radarServo.write(90);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
+        }
+
+        // ── reset smoothing เมื่อ mode เปลี่ยน ──────────────
+        if (strcmp((const char *)mode, lastMode) != 0)
+        {
+            prev = 0;
+            angle = minRotate;
+            direction = 1;
+            tracking = false; // ✅ FIX: reset tracking state ด้วยเมื่อ mode เปลี่ยน
+            objectCount = 0;  // ✅ FIX: reset object buffer ด้วย
+            inGroup = false;
+            nullCount = 0;
+            strncpy(lastMode, (const char *)mode, sizeof(lastMode) - 1);
+            Serial.printf("🔄 Mode changed → %s\n", lastMode);
         }
 
         // ════════════════════════════════════════════════════
@@ -142,8 +196,6 @@ void sonarTask(void *pvParameters)
         if (strcmp((const char *)mode, "STATIC") == 0)
         {
             int target = constrain(pos, 0, 180);
-            if (!radarServo.attached())
-                radarServo.attach(SERVO_PIN);
             radarServo.write(target);
 
             float dist = getDistance();
@@ -166,19 +218,20 @@ void sonarTask(void *pvParameters)
         }
 
         // ── Servo move ──────────────────────────────────────
-        if (!radarServo.attached())
-            radarServo.attach(SERVO_PIN);
         radarServo.write(angle);
         vTaskDelay(pdMS_TO_TICKS(30));
 
         // ── อ่านระยะ + smoothing ────────────────────────────
         float dist = getDistance();
 
-        static float prev = 0;
         if (dist > DETECT_MIN_CM && dist < maxRange)
         {
             dist = dist * 0.7f + prev * 0.3f;
             prev = dist;
+        }
+        else
+        {
+            prev = 0;
         }
 
         bool inRange = (dist > DETECT_MIN_CM && dist < maxRange);
@@ -190,7 +243,6 @@ void sonarTask(void *pvParameters)
         {
             if (!tracking)
             {
-                // ยังไม่เจอของ — ROAM หาของก่อน
                 if (inRange)
                 {
                     lockedAngle = constrain(angle, 0, 180);
@@ -201,7 +253,6 @@ void sonarTask(void *pvParameters)
             }
             else
             {
-                // กำลัง lock อยู่ — อ่านระยะที่มุม lock
                 radarServo.write(lockedAngle);
                 vTaskDelay(pdMS_TO_TICKS(20));
                 float currentDist = getDistance();
@@ -211,40 +262,30 @@ void sonarTask(void *pvParameters)
 
                 if (!stillThere || moved)
                 {
-                    // scan ±10° ก่อน
-                    Serial.printf("🔍 TRACK scanning ±%d° around %d°\n", TRACK_SCAN_RANGE, lockedAngle);
                     int newAngle = scanClosest(lockedAngle);
-
                     if (newAngle != -1)
                     {
-                        // เจอใน ±10°
                         radarServo.write(newAngle);
                         vTaskDelay(pdMS_TO_TICKS(20));
-                        float newDist = getDistance();
                         lockedAngle = newAngle;
-                        lockedDist = newDist;
+                        lockedDist = getDistance();
                         Serial.printf("🎯 TRACK re-locked at %d° %.1f cm\n", lockedAngle, lockedDist);
                     }
                     else
                     {
-                        // ±10° ไม่เจอ → scan 0-180° เลย
-                        Serial.println("🔍 TRACK full scan minRotate-,maxRotate");
                         int fullAngle = scanRange(minRotate, maxRotate);
-
                         if (fullAngle != -1)
                         {
                             radarServo.write(fullAngle);
                             vTaskDelay(pdMS_TO_TICKS(20));
-                            float fullDist = getDistance();
                             lockedAngle = fullAngle;
-                            lockedDist = fullDist;
+                            lockedDist = getDistance();
                             Serial.printf("🎯 TRACK found at %d° %.1f cm\n", lockedAngle, lockedDist);
                         }
                         else
                         {
-                            // หาไม่เจอเลย → กลับไป ROAM
                             tracking = false;
-                            Serial.println("❌ TRACK lost target, back to ROAM");
+                            Serial.println("❌ TRACK lost target");
                             vTaskDelay(pdMS_TO_TICKS(30));
                             continue;
                         }
@@ -255,7 +296,6 @@ void sonarTask(void *pvParameters)
                     lockedDist = currentDist;
                 }
 
-                // report ตำแหน่งปัจจุบัน
                 angle = lockedAngle;
                 char msg[80];
                 snprintf(msg, sizeof(msg),
@@ -264,7 +304,7 @@ void sonarTask(void *pvParameters)
                 mqttPublish("BeanNian/esp32/report", msg);
                 Serial.printf("📡 TRACK [%d°] %.1f cm\n", lockedAngle, lockedDist);
 
-                vTaskDelay(pdMS_TO_TICKS(30));
+                vTaskDelay(pdMS_TO_TICKS(2000));
                 continue;
             }
         }
@@ -281,7 +321,6 @@ void sonarTask(void *pvParameters)
             if (inRange)
             {
                 nullCount = 0;
-
                 if (!inGroup)
                 {
                     inGroup = true;
@@ -338,6 +377,20 @@ void sonarTask(void *pvParameters)
         {
             angle = maxRotate;
             direction = -1;
+
+            if (strcmp((const char *)mode, "ROAM") == 0)
+            {
+                if (inGroup && objectCount < MAX_OBJECTS)
+                {
+                    objects[objectCount].angle = groupMinAngle;
+                    objects[objectCount].distance = groupMinDist;
+                    objectCount++;
+                    inGroup = false;
+                }
+                reportRoam(objects, objectCount);
+                objectCount = 0;
+                nullCount = 0;
+            }
         }
         else if (angle <= minRotate)
         {
@@ -353,7 +406,6 @@ void sonarTask(void *pvParameters)
                     objectCount++;
                     inGroup = false;
                 }
-
                 reportRoam(objects, objectCount);
                 objectCount = 0;
                 nullCount = 0;

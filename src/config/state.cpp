@@ -1,6 +1,6 @@
 #include "state.h"
 
-volatile bool isSystemStart = false;
+volatile bool isSystemStart = true;
 volatile bool isAlert = false;
 volatile int pos = 0;
 volatile int minRotate = 0;
